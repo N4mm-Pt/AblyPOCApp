@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useRoute } from 'vue-router'
+import { computed } from 'vue'
 
 const route = useRoute()
 
@@ -7,6 +8,12 @@ const navigation = [
   { path: '/', label: 'Teacher Dashboard', icon: '👨‍🏫' },
   { path: '/student', label: 'Student View', icon: '👨‍🎓' }
 ]
+
+// Get current page title based on route
+const currentPageTitle = computed(() => {
+  const currentNav = navigation.find(nav => nav.path === route.path)
+  return currentNav ? currentNav.label : 'Classroom'
+})
 </script>
 
 <template>
@@ -14,7 +21,7 @@ const navigation = [
     <nav class="navigation">
       <div class="nav-container">
         <div class="nav-brand">
-          <h2>📚 Classroom POC</h2>
+          <h2>📚 {{ currentPageTitle }}</h2>
         </div>
         <div class="nav-links">
           <router-link 

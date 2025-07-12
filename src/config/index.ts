@@ -10,7 +10,6 @@ export const config = {
     
     endpoints: {
       chat: '/class/chat',
-      cursorStream: '/class/cursor-stream',
       studentJoin: '/class/join',
       studentLeave: '/class/leave'
     },

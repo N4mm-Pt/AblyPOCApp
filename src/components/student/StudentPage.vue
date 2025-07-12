@@ -1,7 +1,5 @@
 <template>
   <div class="student-page">
-    <h1>Student View</h1>
-    
     <!-- Name input form - shown when not joined -->
     <div v-if="!hasJoinedClass" class="name-input-section">
       <div class="name-card">
@@ -35,16 +33,16 @@
       </div>
       
       <div class="connection-status">
-        <p>Status: {{ isConnected ? 'Connected' : 'Disconnected' }}</p>
-        <p v-if="connectionError" class="error">{{ connectionError }}</p>
-        <p>Student: <strong>{{ studentName }}</strong></p>
-        <p>Class ID: <strong>{{ classId }}</strong></p>
-      </div>
-
-      <div class="actions">
-        <button @click="raiseHand" :disabled="!isConnected" class="raise-hand-btn">
-          🖐️ Raise Hand
-        </button>
+        <div class="status-row">
+          <div class="status-info">
+            <p>Status: {{ isConnected ? 'Connected' : 'Disconnected' }}</p>
+            <p v-if="connectionError" class="error">{{ connectionError }}</p>
+            <p>Student: <strong>{{ studentName }}</strong> | Class: <strong>{{ classId }}</strong></p>
+          </div>
+          <div class="cursor-status-compact" v-if="isTeacherCursorStreaming">
+            <span class="cursor-indicator">🎯 Teacher Streaming</span>
+          </div>
+        </div>
       </div>
 
       <div class="chat-section">
@@ -80,7 +78,10 @@
           placeholder="Type a message..."
           :disabled="!isConnected"
         />
-        <button @click="sendMessage" :disabled="!isConnected || !newMessage.trim()">
+        <button @click="raiseHand" :disabled="!isConnected" class="raise-hand-btn-compact" title="Raise hand">
+          🖐️
+        </button>
+        <button @click="sendMessage" :disabled="!isConnected || !newMessage.trim()" class="send-btn">
           Send
         </button>
       </div>
@@ -92,6 +93,30 @@
         <p>Real-time teacher cursor tracking will be implemented when needed to save quotas.</p>
       </div>
     </div> <!-- classroom-interface -->
+
+    <!-- Student Whiteboard Overlay (when teacher is streaming) -->
+    <div v-if="isTeacherCursorStreaming" class="student-whiteboard" ref="studentWhiteboard">
+      <div class="whiteboard-overlay">
+        <div class="whiteboard-header">
+          <h3>Teacher is demonstrating</h3>
+          <button @click="hideWhiteboard" class="close-whiteboard-btn">✕ Close</button>
+        </div>
+        <div class="whiteboard-canvas" ref="whiteboardCanvas">
+          <!-- Teacher cursor will be rendered here -->
+          <div 
+            v-if="teacherCursor && teacherCursor.x >= 0 && teacherCursor.y >= 0"
+            class="teacher-cursor-pointer"
+            :style="{
+              left: teacherCursor.x + '%',
+              top: teacherCursor.y + '%'
+            }"
+          >
+            <div class="cursor-dot"></div>
+            <div class="cursor-label">{{ teacherCursor.userName || 'Teacher' }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div> <!-- student-page -->
 </template>
 
@@ -110,7 +135,13 @@ const {
   sendMessage,
   raiseHand,
   joinClass,
-  classId
+  classId,
+  // Cursor streaming functionality
+  isTeacherCursorStreaming,
+  teacherCursor,
+  hideWhiteboard,
+  studentWhiteboard,
+  whiteboardCanvas
 } = useStudentPage()
 
 // Handle joining the class with a name
@@ -174,16 +205,6 @@ export default {};
     transform: translateX(0);
     opacity: 1;
   }
-}
-
-.student-page h1 {
-  color: white;
-  text-align: center;
-  margin: 0 0 16px 0;
-  font-size: 2.2rem;
-  font-weight: 700;
-  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-  flex-shrink: 0;
 }
 
 /* Name Input Section */
@@ -291,14 +312,26 @@ export default {};
   flex-shrink: 0;
 }
 
+.status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.status-info {
+  flex: 1;
+}
+
 .connection-status p {
-  margin: 8px 0;
+  margin: 4px 0;
   font-weight: 500;
   color: #065f46;
+  font-size: 0.9rem;
 }
 
 .connection-status p:first-child {
-  font-size: 1.1rem;
+  font-size: 1rem;
   color: #10b981;
   font-weight: 600;
 }
@@ -307,62 +340,27 @@ export default {};
   color: #dc2626;
   font-weight: 600;
   background: #fef2f2;
-  padding: 8px 12px;
-  border-radius: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
   border: 1px solid #fecaca;
+  font-size: 0.85rem;
 }
 
-.actions {
-  margin-bottom: 12px;
+/* Compact Cursor Status */
+.cursor-status-compact {
   display: flex;
-  justify-content: center;
-  flex-shrink: 0;
+  align-items: center;
 }
 
-.raise-hand-btn {
-  padding: 16px 32px;
-  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+.cursor-indicator {
+  background: linear-gradient(135deg, #dc2626, #f59e0b);
   color: white;
-  border: none;
+  padding: 6px 12px;
   border-radius: 16px;
-  cursor: pointer;
-  font-size: 18px;
+  font-size: 0.8rem;
   font-weight: 600;
-  transition: all 0.3s ease;
-  box-shadow: 0 8px 24px rgba(16, 185, 129, 0.3);
-  position: relative;
-  overflow: hidden;
-}
-
-.raise-hand-btn::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: -100%;
-  width: 100%;
-  height: 100%;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
-  transition: left 0.5s;
-}
-
-.raise-hand-btn:hover:not(:disabled)::before {
-  left: 100%;
-}
-
-.raise-hand-btn:hover:not(:disabled) {
-  transform: translateY(-3px);
-  box-shadow: 0 12px 32px rgba(16, 185, 129, 0.4);
-}
-
-.raise-hand-btn:active:not(:disabled) {
-  transform: translateY(-1px);
-}
-
-.raise-hand-btn:disabled {
-  background: #9ca3af;
-  cursor: not-allowed;
-  transform: none;
-  box-shadow: none;
+  animation: pulse 2s infinite;
+  box-shadow: 0 2px 8px rgba(220, 38, 38, 0.3);
 }
 
 .chat-section {
@@ -517,7 +515,7 @@ export default {};
 
 .chat-input {
   display: flex;
-  gap: 12px;
+  gap: 8px;
   flex-shrink: 0;
 }
 
@@ -554,7 +552,41 @@ export default {};
   cursor: not-allowed;
 }
 
-.chat-input button {
+/* Compact Raise Hand Button */
+.raise-hand-btn-compact {
+  padding: 12px;
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  color: white;
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 18px;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
+  min-width: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.raise-hand-btn-compact:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(245, 158, 11, 0.4);
+}
+
+.raise-hand-btn-compact:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.raise-hand-btn-compact:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+/* Send Button */
+.send-btn {
   padding: 12px 24px;
   background: linear-gradient(135deg, #10b981 0%, #059669 100%);
   color: white;
@@ -567,16 +599,16 @@ export default {};
   box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
 }
 
-.chat-input button:hover:not(:disabled) {
+.send-btn:hover:not(:disabled) {
   transform: translateY(-2px);
   box-shadow: 0 6px 16px rgba(16, 185, 129, 0.4);
 }
 
-.chat-input button:active:not(:disabled) {
+.send-btn:active:not(:disabled) {
   transform: translateY(0);
 }
 
-.chat-input button:disabled {
+.send-btn:disabled {
   background: #9ca3af;
   cursor: not-allowed;
   transform: none;
@@ -634,11 +666,6 @@ export default {};
     padding: 12px;
   }
   
-  .student-page h1 {
-    font-size: 1.8rem;
-    margin-bottom: 12px;
-  }
-  
   .connection-status {
     padding: 10px 12px;
     margin-bottom: 12px;
@@ -659,11 +686,6 @@ export default {};
   
   .chat-input button {
     width: 100%;
-  }
-  
-  .raise-hand-btn {
-    padding: 14px 24px;
-    font-size: 16px;
   }
   
   /* Mobile responsive improvements for name input */
@@ -689,11 +711,6 @@ export default {};
     padding: 8px;
   }
   
-  .student-page h1 {
-    font-size: 1.6rem;
-    margin-bottom: 10px;
-  }
-  
   .connection-status {
     padding: 8px 10px;
     margin-bottom: 10px;
@@ -709,11 +726,6 @@ export default {};
   
   .chat-input input {
     font-size: 16px; /* Prevent zoom on iOS */
-  }
-  
-  .raise-hand-btn {
-    padding: 12px 20px;
-    font-size: 15px;
   }
 }
 
@@ -744,6 +756,164 @@ export default {};
   .message {
     background: #1e293b;
     color: #f1f5f9;
+  }
+}
+
+/* Student Whiteboard Overlay Styles */
+.student-whiteboard {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.9);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.student-whiteboard .whiteboard-overlay {
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  width: 95%;
+  height: 90%;
+  max-width: 1400px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.whiteboard-header {
+  background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+  color: white;
+  padding: 15px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.whiteboard-header h3 {
+  margin: 0;
+  font-size: 1.3rem;
+  font-weight: 600;
+}
+
+.close-whiteboard-btn {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.close-whiteboard-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+  transform: translateY(-1px);
+}
+
+.student-whiteboard .whiteboard-canvas {
+  flex: 1;
+  background: #fafafa;
+  position: relative;
+  border: none;
+  overflow: hidden;
+}
+
+/* Teacher cursor pointer */
+.teacher-cursor-pointer {
+  position: absolute;
+  pointer-events: none;
+  z-index: 10;
+  transition: all 0.1s ease-out;
+}
+
+.cursor-dot {
+  width: 12px;
+  height: 12px;
+  background: #ef4444;
+  border: 2px solid white;
+  border-radius: 50%;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  position: relative;
+}
+
+.cursor-dot::before {
+  content: '';
+  position: absolute;
+  top: -2px;
+  left: -2px;
+  width: 16px;
+  height: 16px;
+  border: 2px solid #ef4444;
+  border-radius: 50%;
+  animation: pulse 2s infinite;
+}
+
+.cursor-label {
+  background: #ef4444;
+  color: white;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  position: absolute;
+  top: 20px;
+  left: -10px;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.cursor-label::before {
+  content: '';
+  position: absolute;
+  top: -4px;
+  left: 15px;
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-bottom: 4px solid #ef4444;
+}
+
+@keyframes pulse {
+  0% {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.3;
+    transform: scale(1.5);
+  }
+  100% {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+}
+
+/* Responsive design for student whiteboard */
+@media (max-width: 768px) {
+  .student-whiteboard .whiteboard-overlay {
+    width: 98%;
+    height: 95%;
+  }
+  
+  .whiteboard-header {
+    padding: 12px 15px;
+  }
+  
+  .whiteboard-header h3 {
+    font-size: 1.1rem;
+  }
+  
+  .close-whiteboard-btn {
+    padding: 6px 12px;
+    font-size: 13px;
   }
 }
 </style>

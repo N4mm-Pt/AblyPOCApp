@@ -38,13 +38,17 @@ baseUrl: 'https://your-api-domain.com/api'
 
 Low-level service that handles:
 - HTTP requests to `/api/class/chat`
-- WebSocket connections to `/api/class/cursor-stream`
+- Direct Ably real-time communication for cursor streaming
+- Student join/leave notifications
+- Cursor streaming toggle control
 - Message serialization/deserialization
 
 #### Key Methods:
 - `sendChatMessage(message)` - Send chat messages
-- `createCursorWebSocket(classId, userId, callbacks)` - Create WebSocket connection
-- `sendCursorData(websocket, cursorData)` - Send cursor position data
+- `sendCursorDataViaAbly(classId, cursorData)` - Send cursor data via Ably
+- `toggleCursorStream(classId, teacherId, teacherName, enabled)` - Toggle cursor streaming
+- `notifyStudentJoin(classId, studentId, studentName)` - Notify student join
+- `notifyStudentLeave(classId, studentId, studentName)` - Notify student leave
 
 ### 2. ClassService (`class.service.ts`)
 
@@ -120,7 +124,11 @@ The services map to your .NET controller endpoints:
 | Service Method | HTTP Method | Endpoint | Description |
 |----------------|-------------|----------|-------------|
 | `sendChatMessage()` | POST | `/api/class/chat` | Send chat messages |
-| `createCursorWebSocket()` | WebSocket | `/api/class/cursor-stream` | Real-time cursor tracking |
+| `notifyStudentJoin()` | POST | `/api/class/join` | Notify when student joins |
+| `notifyStudentLeave()` | POST | `/api/class/leave` | Notify when student leaves |
+| `toggleCursorStream()` | POST | `/api/class/toggle-cursor` | Toggle cursor streaming mode |
+
+**Note:** Cursor data is sent directly via Ably for optimal performance, bypassing the backend API.
 
 ## Message Format
 

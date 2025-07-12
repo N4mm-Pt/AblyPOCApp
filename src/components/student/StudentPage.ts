@@ -11,6 +11,11 @@ export default function useStudentPage() {
   const studentName = ref('');
   const hasJoinedClass = ref(false);
   const notification = ref<string | null>(null);
+  
+  // Cursor streaming state
+  const isTeacherCursorStreaming = ref(false);
+  const studentWhiteboard = ref<HTMLElement | null>(null);
+  const whiteboardCanvas = ref<HTMLElement | null>(null);
 
   // Auto-hide notification after 3 seconds
   const showNotification = (message: string) => {
@@ -25,7 +30,7 @@ export default function useStudentPage() {
 
   const classId = 'demo-class-001'; // Should match the teacher's class ID
 
-  // Handle incoming chat messages
+  // Handle incoming chat messages and cursor data
   const handleChatMessage = (message: ChatMessageReceived) => {
     // Don't add duplicate messages from self
     if (student && message.from !== student.id) {
@@ -39,6 +44,50 @@ export default function useStudentPage() {
         } else if (message.message && message.message.includes('left the class')) {
           const studentName = message.fromName || 'Unknown Student';
           showNotification(`👋 ${studentName} left the class`);
+        }
+      }
+    }
+  };
+
+  // Handle cursor toggle messages from teacher
+  const handleCursorToggle = (data: any) => {
+    if (data.type === 'cursor-toggle' && data.content) {
+      const toggleData = data.content;
+      if (data.from && data.from.startsWith('teacher-')) {
+        if (toggleData.enabled) {
+          isTeacherCursorStreaming.value = true;
+          showNotification('🎯 Teacher started cursor streaming - Whiteboard opened');
+        } else {
+          isTeacherCursorStreaming.value = false;
+          teacherCursor.value = null;
+          showNotification('⚫ Teacher stopped cursor streaming - Whiteboard closed');
+        }
+      }
+    }
+  };
+
+  // Handle incoming cursor data from teacher
+  const handleCursorData = (data: any) => {
+    if (data.type === 'cursor' && data.content) {
+      const cursorData = data.content as CursorData;
+      
+      // Only show teacher cursor
+      if (data.from && data.from.startsWith('teacher-')) {
+        teacherCursor.value = cursorData;
+        
+        // Auto-show whiteboard when teacher starts streaming
+        if (cursorData.x >= 0 && cursorData.y >= 0 && !isTeacherCursorStreaming.value) {
+          isTeacherCursorStreaming.value = true;
+          showNotification('🎯 Teacher is demonstrating - whiteboard opened');
+        }
+        
+        // Hide cursor when teacher stops streaming
+        if (cursorData.x < 0 || cursorData.y < 0) {
+          setTimeout(() => {
+            if (teacherCursor.value && (teacherCursor.value.x < 0 || teacherCursor.value.y < 0)) {
+              teacherCursor.value = null;
+            }
+          }, 1000); // Small delay to avoid flickering
         }
       }
     }
@@ -67,6 +116,12 @@ export default function useStudentPage() {
       
       // Set up message handler
       classService.onMessageReceived(handleChatMessage);
+      
+      // Set up cursor handler
+      classService.onCursorReceived(handleCursorData);
+      
+      // Set up cursor toggle handler
+      classService.onCursorToggle(handleCursorToggle);
       
       isConnected.value = true;
       hasJoinedClass.value = true;
@@ -146,10 +201,22 @@ export default function useStudentPage() {
   // Leave the class
   const leaveClass = async () => {
     classService.removeMessageHandler(handleChatMessage);
+    classService.removeCursorHandler(handleCursorData);
+    classService.removeCursorToggleHandler(handleCursorToggle);
     await classService.leaveClass();
     isConnected.value = false;
     teacherCursor.value = null;
     connectionError.value = null;
+    
+    // Reset cursor streaming state
+    isTeacherCursorStreaming.value = false;
+  };
+
+  // Hide the whiteboard overlay
+  const hideWhiteboard = () => {
+    isTeacherCursorStreaming.value = false;
+    teacherCursor.value = null;
+    showNotification('📋 Whiteboard closed');
   };
 
   // Setup and cleanup
@@ -178,6 +245,13 @@ export default function useStudentPage() {
     joinClass,
     leaveClass,
     showNotification,
-    classId // Add classId directly for template access
+    classId, // Add classId directly for template access
+    // Cursor streaming functionality
+    isTeacherCursorStreaming,
+    hideWhiteboard,
+    studentWhiteboard,
+    whiteboardCanvas,
+    handleCursorData,
+    handleCursorToggle
   };
 }

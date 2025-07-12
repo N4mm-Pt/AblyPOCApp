@@ -17,6 +17,8 @@ export interface MessageWrapperModel {
 }
 
 export interface CursorData {
+  userId?: string;
+  userName?: string;
   x: number;
   y: number;
   timestamp?: number;
@@ -111,7 +113,12 @@ export class ApiService {
       onMessage(message.data);
     });
 
-    console.log(`Subscribed to channel: ${channelName} with 1-minute rewind`);
+    // Also subscribe to cursor-stream events for real-time cursor tracking
+    await channel.subscribe('cursor-stream', (message) => {
+      onMessage(message.data);
+    });
+
+    console.log(`Subscribed to channel: ${channelName} with 1-minute rewind for chat and cursor events`);
     return channel;
   }
 
@@ -181,66 +188,25 @@ export class ApiService {
   }
 
   /**
-   * Create a WebSocket connection for cursor streaming
+   * Send cursor data via Ably to the class channel
    * @param classId The class ID
-   * @param userId The user ID
-   * @param onMessage Callback for when cursor messages are received
-   * @param onError Callback for when errors occur
-   * @param onClose Callback for when the connection closes
-   * @returns WebSocket instance
-   */
-  createCursorWebSocket(
-    classId: string,
-    userId: string,
-    onMessage?: (data: any) => void,
-    onError?: (error: Event) => void,
-    onClose?: (event: CloseEvent) => void
-  ): WebSocket {
-    const wsUrl = this.baseUrl
-      .replace('http://', 'ws://')
-      .replace('https://', 'wss://');
-    
-    const url = `${wsUrl}${API_CONFIG.endpoints.cursorStream}?classId=${encodeURIComponent(classId)}&userId=${encodeURIComponent(userId)}`;
-    
-    const websocket = new WebSocket(url);
-
-    websocket.onopen = (event) => {
-      console.log('Cursor WebSocket connected:', event);
-    };
-
-    websocket.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        onMessage?.(data);
-      } catch (error) {
-        console.error('Error parsing WebSocket message:', error);
-        onError?.(error as Event);
-      }
-    };
-
-    websocket.onerror = (event) => {
-      console.error('Cursor WebSocket error:', event);
-      onError?.(event);
-    };
-
-    websocket.onclose = (event) => {
-      console.log('Cursor WebSocket closed:', event);
-      onClose?.(event);
-    };
-
-    return websocket;
-  }
-
-  /**
-   * Send cursor data through WebSocket
-   * @param websocket The WebSocket instance
    * @param cursorData The cursor data to send
    */
-  sendCursorData(websocket: WebSocket, cursorData: CursorData): void {
-    if (websocket.readyState === WebSocket.OPEN) {
-      websocket.send(JSON.stringify(cursorData));
-    } else {
-      console.warn('WebSocket is not open. Cannot send cursor data.');
+  async sendCursorDataViaAbly(classId: string, cursorData: CursorData): Promise<void> {
+    if (!this.ably) {
+      throw new Error('Ably not initialized. Call initializeAbly() first.');
+    }
+
+    const channelName = `${config.ably.channelPrefix}${classId}`;
+    const channel = this.ably.channels.get(channelName);
+
+    const cursorMessage = createCursorMessage(classId, cursorData.userId || 'unknown', cursorData);
+    
+    try {
+      await channel.publish('cursor-stream', cursorMessage);
+    } catch (error) {
+      console.error('Failed to send cursor data via Ably:', error);
+      throw error;
     }
   }
 
@@ -273,6 +239,41 @@ export class ApiService {
       return response;
     } catch (error) {
       console.error('Error notifying student join:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Toggle cursor streaming mode and notify all students
+   * @param classId The class ID
+   * @param teacherId The teacher's unique ID
+   * @param teacherName The teacher's display name
+   * @param enabled Whether cursor streaming is enabled or disabled
+   * @returns Promise<Response>
+   */
+  async toggleCursorStream(classId: string, teacherId: string, teacherName: string, enabled: boolean): Promise<Response> {
+    try {
+      const response = await fetch(`${this.baseUrl}/class/toggle-cursor`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          classId,
+          teacherId,
+          teacherName,
+          enabled
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(`HTTP ${response.status}: ${errorData.error || response.statusText}`);
+      }
+
+      return response;
+    } catch (error) {
+      console.error('Error toggling cursor stream:', error);
       throw error;
     }
   }

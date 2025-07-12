@@ -36,6 +36,8 @@ export class ClassService {
   private currentClassId: string | null = null;
   private currentUser: User | null = null;
   private messageHandlers: ((message: ChatMessageReceived) => void)[] = [];
+  private cursorHandlers: ((data: any) => void)[] = [];
+  private cursorToggleHandlers: ((data: any) => void)[] = [];
   private ablyChannel: Ably.RealtimeChannel | null = null;
   private userDisplayNames: Map<string, string> = new Map(); // Track user ID to display name mapping
   // Note: WebSocket properties removed to save quotas - will be added back when needed
@@ -100,6 +102,18 @@ export class ClassService {
    */
   private handleAblyMessage(data: any): void {
     try {
+      // Handle cursor streaming data
+      if (data.type === 'cursor' && data.content) {
+        this.emitCursorData(data);
+        return;
+      }
+
+      // Handle cursor toggle messages
+      if (data.type === 'cursor-toggle' && data.content) {
+        this.emitCursorToggle(data);
+        return;
+      }
+
       // Handle student join/leave notifications
       if (data.type === 'student-join' && data.content && this.currentClassId && this.currentUser) {
         const joinData = data.content;
@@ -313,6 +327,24 @@ export class ClassService {
   }
 
   /**
+   * Send cursor data to the class channel
+   */
+  async sendCursorData(cursorData: CursorData): Promise<void> {
+    if (!this.currentClassId || !this.currentUser) {
+      throw new Error('Not connected to a class');
+    }
+
+    try {
+      // Send cursor data directly via Ably (bypassing backend API for efficiency)
+      // This avoids overwhelming the backend with hundreds of cursor position updates
+      await apiService.sendCursorDataViaAbly(this.currentClassId, cursorData);
+    } catch (error) {
+      console.error('Failed to send cursor data:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Check if user is connected to a class
    */
   isConnected(): boolean {
@@ -332,6 +364,66 @@ export class ClassService {
    */
   onMessageReceived(handler: (message: ChatMessageReceived) => void): void {
     this.messageHandlers.push(handler);
+  }
+
+  /**
+   * Add a cursor handler for incoming cursor data
+   */
+  onCursorReceived(handler: (data: any) => void): void {
+    this.cursorHandlers.push(handler);
+  }
+
+  /**
+   * Remove a cursor handler
+   */
+  removeCursorHandler(handler: (data: any) => void): void {
+    const index = this.cursorHandlers.indexOf(handler);
+    if (index > -1) {
+      this.cursorHandlers.splice(index, 1);
+    }
+  }
+
+  /**
+   * Add a cursor toggle handler for incoming cursor toggle events
+   */
+  onCursorToggle(handler: (data: any) => void): void {
+    this.cursorToggleHandlers.push(handler);
+  }
+
+  /**
+   * Remove a cursor toggle handler
+   */
+  removeCursorToggleHandler(handler: (data: any) => void): void {
+    const index = this.cursorToggleHandlers.indexOf(handler);
+    if (index > -1) {
+      this.cursorToggleHandlers.splice(index, 1);
+    }
+  }
+
+  /**
+   * Emit cursor data to all handlers
+   */
+  private emitCursorData(data: any): void {
+    this.cursorHandlers.forEach(handler => {
+      try {
+        handler(data);
+      } catch (error) {
+        console.error('Error in cursor handler:', error);
+      }
+    });
+  }
+
+  /**
+   * Emit cursor toggle data to all handlers
+   */
+  private emitCursorToggle(data: any): void {
+    this.cursorToggleHandlers.forEach(handler => {
+      try {
+        handler(data);
+      } catch (error) {
+        console.error('Error in cursor toggle handler:', error);
+      }
+    });
   }
 
   /**
