@@ -1,0 +1,133 @@
+/* Responsive design */
+@media (max-width: 768px) {
+  .student-page {
+    padding: 12px;
+  }
+  
+  .notification {
+    top: 60px; /* Adjust for mobile */
+    right: 12px;
+    left: 12px; /* Make it full width on mobile */
+    max-width: none;
+    font-size: 13px;
+    padding: 12px 16px;
+  }
+  
+  .name-card {
+    padding: 30px 20px;
+    margin: 0 10px;
+  }
+  
+  .name-card h2 {
+    font-size: 1.75rem;
+  }
+  
+  .connection-status {
+    padding: 10px 12px;
+    margin-bottom: 12px;
+  }
+  
+  .status-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  
+  .chat-section {
+    padding: 12px;
+  }
+  
+  .chat-input {
+    flex-direction: column;
+    gap: 8px;
+  }
+  
+  .chat-input button {
+    width: 100%;
+    margin: 0;
+  }
+  
+  .raise-hand-btn-compact {
+    width: 100%;
+    min-width: unset;
+  }
+  
+  .whiteboard-canvas::before {
+    font-size: 16px;
+    padding: 15px 25px;
+  }
+  
+  .messages {
+    max-height: calc(100vh - 300px);
+    min-height: 250px;
+  }
+  
+  .private-messages {
+    height: calc(100vh - 350px);
+    min-height: 250px;
+    max-height: 400px;
+  }
+}
+
+@media (max-width: 480px) {
+  .student-page {
+    padding: 8px;
+  }
+  
+  .notification {
+    top: 50px; /* Adjust for smaller screens */
+    right: 8px;
+    left: 8px;
+    font-size: 12px;
+    padding: 10px 14px;
+  }
+  
+  .name-card {
+    padding: 25px 15px;
+    margin: 0 5px;
+  }
+  
+  .name-card h2 {
+    font-size: 1.5rem;
+  }
+  
+  .name-card p {
+    font-size: 1rem;
+  }
+  
+  .connection-status {
+    padding: 8px 10px;
+    margin-bottom: 10px;
+  }
+  
+  .chat-section {
+    padding: 10px;
+  }
+  
+  .chat-input input {
+    font-size: 16px; /* Prevent zoom on iOS */
+  }
+  
+  .message {
+    padding: 12px 14px;
+  }
+  
+  .message-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  
+  .whiteboard-header {
+    padding: 15px 16px;
+  }
+  
+  .whiteboard-header h3 {
+    font-size: 1.1rem;
+  }
+  
+  .close-whiteboard-btn {
+    padding: 6px 12px;
+    font-size: 13px;
+  }
+}

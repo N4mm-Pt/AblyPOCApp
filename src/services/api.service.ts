@@ -32,6 +32,14 @@ export interface ChatMessage {
   [key: string]: any;
 }
 
+export interface PrivateChatRequest {
+  classId: string;
+  teacherId: string;
+  teacherName: string;
+  studentId: string;
+  studentName: string;
+}
+
 // API Service class
 export class ApiService {
   private baseUrl: string;
@@ -104,7 +112,7 @@ export class ApiService {
     // Get channel with rewind parameter to fetch recent messages on connect
     const channel = this.ably.channels.get(channelName, {
       params: {
-        rewind: '1m', // Fetch messages from the last 1 minute on connect
+        rewind: '2m', // Fetch messages from the last 2 minutes on connect
       }
     });
 
@@ -118,7 +126,7 @@ export class ApiService {
       onMessage(message.data);
     });
 
-    console.log(`Subscribed to channel: ${channelName} with 1-minute rewind for chat and cursor events`);
+    console.log(`Subscribed to channel: ${channelName} with 2-minute rewind for chat and cursor events`);
     return channel;
   }
 
@@ -135,6 +143,49 @@ export class ApiService {
     const channel = this.ably.channels.get(channelName);
     await channel.unsubscribe();
     console.log(`Unsubscribed from channel: ${channelName}`);
+  }
+
+  /**
+   * Subscribe to a private channel for one-on-one chat
+   * @param channelId The private channel ID (e.g., "teacher-123_student-456")
+   * @param onMessage Callback for incoming messages
+   * @returns Promise<Ably.RealtimeChannel>
+   */
+  async subscribeToPrivateChannel(
+    channelId: string, 
+    onMessage: (message: any) => void
+  ): Promise<Ably.RealtimeChannel> {
+    if (!this.ably) {
+      throw new Error('Ably not initialized. Call initializeAbly() first.');
+    }
+
+    const channelName = `private-${channelId}`;
+    
+    const channel = this.ably.channels.get(channelName, {
+      params: {
+        rewind: '5m', // Fetch messages from the last 5 minutes on connect
+      }
+    });
+
+    await channel.subscribe('private-chat', (message) => {
+      onMessage(message.data);
+    });
+
+    return channel;
+  }
+
+  /**
+   * Unsubscribe from a private channel
+   * @param channelId The private channel ID
+   */
+  async unsubscribeFromPrivateChannel(channelId: string): Promise<void> {
+    if (!this.ably) {
+      return;
+    }
+
+    const channelName = `private-${channelId}`;
+    const channel = this.ably.channels.get(channelName);
+    await channel.unsubscribe();
   }
 
   /**
@@ -312,6 +363,54 @@ export class ApiService {
   }
 
   /**
+   * Send a private message via Ably
+   * @param channelId The private channel ID
+   * @param messageData The message data to send
+   */
+  async sendPrivateMessageViaAbly(channelId: string, messageData: MessageWrapperModel): Promise<void> {
+    if (!this.ably) {
+      throw new Error('Ably not initialized. Call initializeAbly() first.');
+    }
+
+    const channelName = `private-${channelId}`;
+    const channel = this.ably.channels.get(channelName);
+
+    try {
+      await channel.publish('private-chat', messageData);
+    } catch (error) {
+      console.error('Failed to send private message via Ably:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Request private chat with a student (teacher initiated)
+   * @param request The private chat request data
+   * @returns Promise<Response>
+   */
+  async requestPrivateChat(request: PrivateChatRequest): Promise<Response> {
+    try {
+      const response = await fetch(`${this.baseUrl}/class/private-chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(request),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(`HTTP ${response.status}: ${errorData.error || response.statusText}`);
+      }
+
+      return response;
+    } catch (error) {
+      console.error('Error requesting private chat:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Reconnect to Ably with exponential backoff
    * @param clientId The client ID for Ably connection
    * @param attempt The current attempt number
@@ -366,4 +465,17 @@ export const createCursorMessage = (
   to: 'all',
   type: 'cursor',
   content: cursor
+});
+
+export const createPrivateChatMessage = (
+  channelId: string,
+  from: string,
+  to: string,
+  message: ChatMessage
+): MessageWrapperModel => ({
+  classId: channelId,
+  from,
+  to,
+  type: 'private-chat',
+  content: message
 });

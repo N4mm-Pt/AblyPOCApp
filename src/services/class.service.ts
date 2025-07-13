@@ -1,9 +1,9 @@
-import { apiService, createChatMessage } from './api.service';
-import type { CursorData, ChatMessage } from './api.service';
+import { apiService, createChatMessage, createPrivateChatMessage } from './api.service';
+import type { CursorData, ChatMessage, PrivateChatRequest } from './api.service';
 import type * as Ably from 'ably';
 
 // Re-export types for convenience
-export type { CursorData, ChatMessage } from './api.service';
+export type { CursorData, ChatMessage, PrivateChatRequest } from './api.service';
 
 export interface ChatMessageReceived {
   id: string;
@@ -13,7 +13,7 @@ export interface ChatMessageReceived {
   to: string;
   message: string;
   timestamp: number;
-  type: 'chat' | 'system' | 'hand-raise';
+  type: 'chat' | 'system' | 'hand-raise' | 'private-chat';
 }
 
 export interface ClassRoom {
@@ -38,8 +38,12 @@ export class ClassService {
   private messageHandlers: ((message: ChatMessageReceived) => void)[] = [];
   private cursorHandlers: ((data: any) => void)[] = [];
   private cursorToggleHandlers: ((data: any) => void)[] = [];
+  private privateChatHandlers: ((data: any) => void)[] = [];
   private ablyChannel: Ably.RealtimeChannel | null = null;
+  private privateChannel: Ably.RealtimeChannel | null = null;
   private userDisplayNames: Map<string, string> = new Map(); // Track user ID to display name mapping
+  private isInPrivateChat: boolean = false;
+  private currentPrivateChannelId: string | null = null;
   // Note: WebSocket properties removed to save quotas - will be added back when needed
 
   /**
@@ -64,6 +68,14 @@ export class ClassService {
         this.handleAblyMessage(data);
       });
       
+      // If student, also auto-subscribe to their private channel for potential teacher messages
+      if (user.role === 'student') {
+        const privateChannelId = `${user.id}`;
+        this.privateChannel = await apiService.subscribeToPrivateChannel(privateChannelId, (data: any) => {
+          this.handlePrivateMessage(data);
+        });
+      }
+      
       // Notify the server that this student has joined the class
       await apiService.notifyStudentJoin(classId, user.id, user.name);
       
@@ -84,6 +96,12 @@ export class ClassService {
         await apiService.notifyStudentLeave(this.currentClassId, this.currentUser.id, this.currentUser.name);
         
         await apiService.unsubscribeFromClassChannel(this.currentClassId);
+        
+        // Also unsubscribe from private channel if connected
+        if (this.currentPrivateChannelId) {
+          await apiService.unsubscribeFromPrivateChannel(this.currentPrivateChannelId);
+        }
+        
         apiService.disconnectAbly();
       } catch (error) {
         console.error('Error unsubscribing from Ably:', error);
@@ -93,8 +111,32 @@ export class ClassService {
     this.currentClassId = null;
     this.currentUser = null;
     this.ablyChannel = null;
+    this.privateChannel = null;
+    this.currentPrivateChannelId = null;
+    this.isInPrivateChat = false;
     this.userDisplayNames.clear(); // Clear stored display names when leaving class
     console.log('Left the classroom');
+  }
+
+  /**
+   * Handle incoming private messages
+   */
+  private handlePrivateMessage(data: any): void {
+    try {
+      // Handle private chat requests
+      if (data.type === 'private-chat-request' && data.content) {
+        this.emitPrivateChatRequest(data);
+        return;
+      }
+
+      // Handle private chat messages
+      if (data.type === 'private-chat' && data.content) {
+        this.emitPrivateChatMessage(data);
+        return;
+      }
+    } catch (error) {
+      console.error('Error handling private message:', error);
+    }
   }
 
   /**
@@ -102,6 +144,12 @@ export class ClassService {
    */
   private handleAblyMessage(data: any): void {
     try {
+      // Handle private chat requests (these come through main channel)
+      if (data.type === 'private-chat-request' && data.content) {
+        this.emitPrivateChatRequest(data);
+        return;
+      }
+
       // Handle cursor streaming data
       if (data.type === 'cursor' && data.content) {
         this.emitCursorData(data);
@@ -117,6 +165,12 @@ export class ClassService {
       // Handle student join/leave notifications
       if (data.type === 'student-join' && data.content && this.currentClassId && this.currentUser) {
         const joinData = data.content;
+        
+        // Skip invalid content (like {ValueKind: 1})
+        if (joinData.ValueKind !== undefined) {
+          console.log('Skipping student-join message with invalid content:', joinData);
+          return;
+        }
         
         // Try to extract student info from the original message if content parsing fails
         let studentId = joinData.studentId || data.from;
@@ -154,15 +208,19 @@ export class ClassService {
           type: 'system'
         };
         
-        // Only emit if it's not from the current user (avoid duplicates)
-        if (joinMessage.from !== this.currentUser.id) {
-          this.emitMessage(joinMessage);
-        }
+        // Emit the join message - duplicate handling is done in the components
+        this.emitMessage(joinMessage);
         return;
       }
 
       if (data.type === 'student-leave' && data.content && this.currentClassId && this.currentUser) {
         const leaveData = data.content;
+        
+        // Skip invalid content (like {ValueKind: 1})
+        if (leaveData.ValueKind !== undefined) {
+          console.log('Skipping student-leave message with invalid content:', leaveData);
+          return;
+        }
         
         // Emit a special leave message for UI updates
         const leaveMessage: ChatMessageReceived = {
@@ -176,10 +234,8 @@ export class ClassService {
           type: 'system'
         };
         
-        // Only emit if it's not from the current user (avoid duplicates)
-        if (leaveMessage.from !== this.currentUser.id) {
-          this.emitMessage(leaveMessage);
-        }
+        // Emit the leave message - duplicate handling is done in the components
+        this.emitMessage(leaveMessage);
         
         // Remove the student's display name from mapping
         this.userDisplayNames.delete(leaveData.studentId);
@@ -212,21 +268,29 @@ export class ClassService {
           }
         }
 
+        // Use backend timestamp if available, fallback to current time
+        const messageTimestamp = data.content.Timestamp || data.content.timestamp || Date.now();
+        const messageText = data.content.Text || data.content.text || '';
+        
+        // Create a simple hash of the message for better ID uniqueness
+        const messageHash = messageText.split('').reduce((a: number, b: string) => {
+          a = ((a << 5) - a) + b.charCodeAt(0);
+          return a & a;
+        }, 0);
+        
         const message: ChatMessageReceived = {
-          id: `ably-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          id: `${data.from}-${messageTimestamp}-${Math.abs(messageHash)}`,
           classId: this.currentClassId,
           from: data.from,
-          fromName: displayName || data.from, // Use displayName or fallback to ID
+          fromName: displayName || data.from,
           to: data.to,
-          message: data.content.text || data.content.Text, // Backend sends "Text" field
-          timestamp: data.content.timestamp || Date.now(),
-          type: data.content.messageType || 'chat'
+          message: messageText,
+          timestamp: messageTimestamp,
+          type: data.content.MessageType || data.content.messageType || 'chat'
         };
 
-        // Only emit if it's not from the current user (avoid duplicates)
-        if (message.from !== this.currentUser.id) {
-          this.emitMessage(message);
-        }
+        // Emit all messages - duplicate handling is done in the components
+        this.emitMessage(message);
       }
     } catch (error) {
       console.error('Error handling Ably message:', error);
@@ -264,19 +328,8 @@ export class ClassService {
     try {
       await apiService.sendChatMessage(messageWrapper);
       
-      // Emit the message locally for immediate UI update
-      const localMessage: ChatMessageReceived = {
-        id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-        classId: this.currentClassId,
-        from: this.currentUser.id,
-        fromName: this.currentUser.name,
-        to,
-        message,
-        timestamp: Date.now(),
-        type: messageType
-      };
-      
-      this.emitMessage(localMessage);
+      // Don't emit locally - the message will be received via Ably subscription
+      // This prevents duplication
     } catch (error) {
       console.error('Failed to send message:', error);
       throw error;
@@ -401,6 +454,23 @@ export class ClassService {
   }
 
   /**
+   * Add a private chat handler for incoming private chat requests and messages
+   */
+  onPrivateChatReceived(handler: (data: any) => void): void {
+    this.privateChatHandlers.push(handler);
+  }
+
+  /**
+   * Remove a private chat handler
+   */
+  removePrivateChatHandler(handler: (data: any) => void): void {
+    const index = this.privateChatHandlers.indexOf(handler);
+    if (index > -1) {
+      this.privateChatHandlers.splice(index, 1);
+    }
+  }
+
+  /**
    * Emit cursor data to all handlers
    */
   private emitCursorData(data: any): void {
@@ -427,6 +497,70 @@ export class ClassService {
   }
 
   /**
+   * Emit private chat request to all handlers
+   */
+  private emitPrivateChatRequest(data: any): void {
+    this.privateChatHandlers.forEach(handler => {
+      try {
+        // Try to get the teacher name from stored display names or current user
+        let fromName = data.fromName;
+        if (!fromName && this.currentUser && data.from === this.currentUser.id) {
+          fromName = this.currentUser.name;
+        }
+        if (!fromName && this.userDisplayNames.has(data.from)) {
+          fromName = this.userDisplayNames.get(data.from);
+        }
+        if (!fromName && data.from && data.from.startsWith('teacher-')) {
+          fromName = 'Teacher'; // Fallback name
+        }
+        
+        handler({ 
+          type: 'private-chat-request', 
+          content: data.content,
+          from: data.from,
+          fromName: fromName 
+        });
+      } catch (error) {
+        console.error('Error in private chat request handler:', error);
+      }
+    });
+  }
+
+  /**
+   * Emit private chat message to all handlers
+   */
+  private emitPrivateChatMessage(data: any): void {
+    this.privateChatHandlers.forEach(handler => {
+      try {
+        // Try to get the sender name from stored display names or current user
+        let fromName = data.fromName;
+        if (!fromName && this.currentUser && data.from === this.currentUser.id) {
+          fromName = this.currentUser.name;
+        }
+        if (!fromName && this.userDisplayNames.has(data.from)) {
+          fromName = this.userDisplayNames.get(data.from);
+        }
+        if (!fromName && data.from) {
+          if (data.from.startsWith('teacher-')) {
+            fromName = 'Teacher'; // Fallback name for teachers
+          } else if (data.from.startsWith('student-')) {
+            fromName = 'Student'; // Fallback name for students
+          }
+        }
+        
+        handler({ 
+          type: 'private-chat', 
+          content: data.content,
+          from: data.from,
+          fromName: fromName 
+        });
+      } catch (error) {
+        console.error('Error in private chat message handler:', error);
+      }
+    });
+  }
+
+  /**
    * Remove a message handler
    */
   removeMessageHandler(handler: (message: ChatMessageReceived) => void): void {
@@ -447,6 +581,170 @@ export class ClassService {
         console.error('Error in message handler:', error);
       }
     });
+  }
+
+  /**
+   * Start a private chat with a student (teacher initiated)
+   * @param studentId The student's ID
+   * @param studentName The student's name
+   */
+  async startPrivateChat(studentId: string, studentName: string): Promise<string> {
+    if (!this.currentUser || !this.currentClassId) {
+      throw new Error('Not connected to a class');
+    }
+
+    if (this.currentUser.role !== 'teacher') {
+      throw new Error('Only teachers can initiate private chats');
+    }
+
+    try {
+      // Leave main channel
+      if (this.ablyChannel) {
+        await apiService.unsubscribeFromClassChannel(this.currentClassId);
+        this.ablyChannel = null;
+      }
+
+      // Generate private channel ID
+      const privateChannelId = `${this.currentUser.id}_${studentId}`;
+      
+      // Join private channel
+      this.privateChannel = await apiService.subscribeToPrivateChannel(privateChannelId, (data: any) => {
+        this.handlePrivateMessage(data);
+      });
+      
+      this.isInPrivateChat = true;
+      this.currentPrivateChannelId = privateChannelId;
+
+      // Send API request to notify student
+      const request: PrivateChatRequest = {
+        classId: this.currentClassId,
+        teacherId: this.currentUser.id,
+        teacherName: this.currentUser.name,
+        studentId,
+        studentName
+      };
+
+      await apiService.requestPrivateChat(request);
+      
+      return privateChannelId;
+    } catch (error) {
+      console.error('Failed to start private chat:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Accept a private chat request (student response)
+   */
+  async acceptPrivateChat(teacherId: string, _teacherName: string): Promise<void> {
+    if (!this.currentUser || !this.currentClassId) {
+      throw new Error('Not connected to a class');
+    }
+
+    if (this.currentUser.role !== 'student') {
+      throw new Error('Only students can accept private chat requests');
+    }
+
+    try {
+      // Leave main channel
+      if (this.ablyChannel) {
+        await apiService.unsubscribeFromClassChannel(this.currentClassId);
+        this.ablyChannel = null;
+      }
+
+      // Generate private channel ID (same format as teacher)
+      const privateChannelId = `${teacherId}_${this.currentUser.id}`;
+      
+      // Subscribe to private channel
+      this.privateChannel = await apiService.subscribeToPrivateChannel(privateChannelId, (data: any) => {
+        this.handlePrivateMessage(data);
+      });
+      
+      // Join private channel (student was already subscribed but now actively participating)
+      this.isInPrivateChat = true;
+      this.currentPrivateChannelId = privateChannelId;
+
+    } catch (error) {
+      console.error('Failed to accept private chat:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Send a private message
+   * @param message The message to send
+   * @param recipientId The recipient's ID
+   */
+  async sendPrivateMessage(message: string, recipientId: string): Promise<void> {
+    if (!this.currentUser || !this.currentPrivateChannelId) {
+      throw new Error('Not in a private chat');
+    }
+
+    if (!message.trim()) {
+      throw new Error('Message cannot be empty');
+    }
+
+    try {
+      const chatMessage: ChatMessage = {
+        text: message.trim(),
+        timestamp: Date.now(),
+        messageType: 'chat'
+      };
+
+      const messageWrapper = createPrivateChatMessage(
+        this.currentPrivateChannelId,
+        this.currentUser.id,
+        recipientId,
+        chatMessage
+      );
+
+      await apiService.sendPrivateMessageViaAbly(this.currentPrivateChannelId, messageWrapper);
+    } catch (error) {
+      console.error('Failed to send private message:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * End private chat and return to main channel
+   */
+  async endPrivateChat(): Promise<void> {
+    if (!this.currentClassId || !this.currentUser) {
+      throw new Error('Not connected to a class');
+    }
+
+    try {
+      // Leave private channel if connected
+      if (this.currentPrivateChannelId) {
+        await apiService.unsubscribeFromPrivateChannel(this.currentPrivateChannelId);
+        this.privateChannel = null;
+        this.currentPrivateChannelId = null;
+      }
+
+      // Rejoin main channel
+      this.ablyChannel = await apiService.subscribeToClassChannel(this.currentClassId, (data: any) => {
+        this.handleAblyMessage(data);
+      });
+
+      this.isInPrivateChat = false;
+    } catch (error) {
+      console.error('Failed to end private chat:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Check if currently in a private chat
+   */
+  isInPrivateChatMode(): boolean {
+    return this.isInPrivateChat;
+  }
+
+  /**
+   * Get current private channel ID
+   */
+  getCurrentPrivateChannelId(): string | null {
+    return this.currentPrivateChannelId;
   }
 }
 

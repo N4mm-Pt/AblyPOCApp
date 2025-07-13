@@ -9,7 +9,7 @@ const CURSOR_BATCH_INTERVAL = 100; // Send every 100ms for 10 messages per secon
 export default function useTeacherPage() {
   const messages = ref<ChatMessageReceived[]>([]);
   const newMessage = ref('');
-  const connectedStudents = ref<Set<string>>(new Set()); // Store student names, not IDs
+  const connectedStudents = ref<Map<string, string>>(new Map()); // Store student ID -> name mapping
   const cursors = ref<Map<string, CursorData>>(new Map());
   const isConnected = ref(false);
   const connectionError = ref<string | null>(null);
@@ -21,6 +21,12 @@ export default function useTeacherPage() {
   const cursorBatch = ref<CursorData[]>([]);
   const batchTimer = ref<number | null>(null);
   const lastSentPosition = ref<{ x: number; y: number } | null>(null);
+
+  // Private chat state
+  const isInPrivateChat = ref(false);
+  const privateChatStudent = ref<{ id: string; name: string } | null>(null);
+  const privateMessages = ref<ChatMessageReceived[]>([]);
+  const newPrivateMessage = ref('');
 
   // Auto-hide notification after 3 seconds
   const showNotification = (message: string) => {
@@ -41,30 +47,132 @@ export default function useTeacherPage() {
 
   // Handle incoming chat messages
   const handleChatMessage = (message: ChatMessageReceived) => {
-    // Don't add duplicate messages from self
-    if (message.from !== teacher.id) {
-      messages.value.push(message);
-      
-      // Handle system messages for student join/leave
-      if (message.type === 'system') {
-        if (message.message && message.message.includes('joined the class')) {
-          // Add student to connected list when they join
-          const studentName = message.fromName || 'Unknown Student';
-          connectedStudents.value.add(studentName);
-          showNotification(`🎉 ${studentName} joined the class`);
-        } else if (message.message && message.message.includes('left the class')) {
-          // Remove student from connected list when they leave
-          const studentName = message.fromName || 'Unknown Student';
-          connectedStudents.value.delete(studentName);
-          showNotification(`👋 ${studentName} left the class`);
-        }
-      } else {
-        // Track connected students based on regular messages using their display names
-        // Add student to connected list when they send any message
-        if (message.from.startsWith('student-') && message.fromName) {
-          connectedStudents.value.add(message.fromName);
-        }
+    // Check if we already have this message (prevent duplicates)
+    const messageExists = messages.value.some(m => m.id === message.id);
+    if (messageExists) {
+      return;
+    }
+
+    // Add the message to our local messages array
+    messages.value.push(message);
+    
+    // Handle system messages for student join/leave (but not for our own messages)
+    if (message.type === 'system' && message.from !== teacher.id) {
+      if (message.message && message.message.includes('joined the class')) {
+        // Add student to connected list when they join
+        const studentName = message.fromName || 'Unknown Student';
+        const studentId = message.from; // This is the actual student ID
+        connectedStudents.value.set(studentId, studentName);
+        showNotification(`🎉 ${studentName} joined the class`);
+      } else if (message.message && message.message.includes('left the class')) {
+        // Remove student from connected list when they leave
+        const studentId = message.from;
+        const studentName = message.fromName || 'Unknown Student';
+        connectedStudents.value.delete(studentId);
+        showNotification(`👋 ${studentName} left the class`);
       }
+    } else if (message.from !== teacher.id) {
+      // Track connected students based on regular messages using their display names
+      // Add student to connected list when they send any message
+      if (message.from.startsWith('student-') && message.fromName) {
+        connectedStudents.value.set(message.from, message.fromName);
+      }
+    }
+  };
+
+  // Handle private chat messages
+  const handlePrivateChatMessage = (data: any) => {
+    if (data.type === 'private-chat-message' || data.type === 'private-chat') {
+      // Handle both old format (data.data) and new format (data.content)
+      const messageData = data.data || data;
+      const content = messageData.content || data.content;
+      
+      if (content && (content.text || content.message)) {
+        // Extract sender name based on the from field
+        let senderName = messageData.fromName || data.fromName;
+        
+        if (!senderName) {
+          if (messageData.from && messageData.from.startsWith('student-')) {
+            const parts = messageData.from.split('-');
+            if (parts.length >= 2) {
+              senderName = parts[1] || 'Student';
+              senderName = senderName.charAt(0).toUpperCase() + senderName.slice(1);
+            } else {
+              senderName = 'Student';
+            }
+            // Use the stored student name if available
+            if (!senderName || senderName === 'Student') {
+              senderName = privateChatStudent.value?.name || 'Student';
+            }
+          } else if (messageData.from && messageData.from.startsWith('teacher-')) {
+            // Handle teacher messages (own messages)
+            senderName = teacher.name || 'Teacher';
+          } else {
+            // Fallback
+            senderName = privateChatStudent.value?.name || 'Unknown';
+          }
+        }
+        
+        const privateMessage: ChatMessageReceived = {
+          id: `private-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          classId: messageData.classId || classId,
+          from: messageData.from || data.from,
+          fromName: senderName,
+          to: messageData.to || data.to,
+          message: content.text || content.message || '',
+          timestamp: content.timestamp || Date.now(),
+          type: 'chat'
+        };
+        privateMessages.value.push(privateMessage);
+      }
+    }
+  };
+
+  // Start private chat with a student
+  const startPrivateChat = async (studentId: string, studentName: string) => {
+    try {
+      await classService.startPrivateChat(studentId, studentName);
+      isInPrivateChat.value = true;
+      privateChatStudent.value = { id: studentId, name: studentName };
+      privateMessages.value = []; // Clear previous private messages
+      showNotification(`📱 Started private chat with ${studentName}`);
+    } catch (error) {
+      console.error('Failed to start private chat:', error);
+      showNotification('❌ Failed to start private chat');
+    }
+  };
+
+  // Send private message
+  const sendPrivateMessage = async () => {
+    if (!newPrivateMessage.value.trim() || !privateChatStudent.value) return;
+
+    const messageText = newPrivateMessage.value;
+    
+    try {
+      newPrivateMessage.value = ''; // Clear input immediately
+      
+      await classService.sendPrivateMessage(messageText, privateChatStudent.value.id);
+      
+      // Don't add to local messages - it will be received via the private chat handler
+      // This prevents message duplication on the teacher side
+      
+    } catch (error) {
+      console.error('Failed to send private message:', error);
+      newPrivateMessage.value = messageText; // Restore message on error
+    }
+  };
+
+  // End private chat and return to main channel
+  const endPrivateChat = async () => {
+    try {
+      await classService.endPrivateChat();
+      isInPrivateChat.value = false;
+      privateChatStudent.value = null;
+      privateMessages.value = [];
+      showNotification('📱 Ended private chat - returned to main channel');
+    } catch (error) {
+      console.error('Failed to end private chat:', error);
+      showNotification('❌ Failed to end private chat');
     }
   };
 
@@ -72,10 +180,12 @@ export default function useTeacherPage() {
   const joinClass = async () => {
     try {
       connectionError.value = null;
-      await classService.joinClass(classId, teacher);
       
-      // Set up message handler
+      // Set up message handlers BEFORE joining to catch rewind messages
       classService.onMessageReceived(handleChatMessage);
+      classService.onPrivateChatReceived(handlePrivateChatMessage);
+      
+      await classService.joinClass(classId, teacher);
       
       isConnected.value = true;
       
@@ -97,18 +207,8 @@ export default function useTeacherPage() {
       
       await classService.sendMessage(messageText, 'all', 'chat');
       
-      // Add to local messages since emitMessage is called in sendMessage
-      const localMessage: ChatMessageReceived = {
-        id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-        classId,
-        from: teacher.id,
-        fromName: teacher.name,
-        to: 'all',
-        message: messageText,
-        timestamp: Date.now(),
-        type: 'chat'
-      };
-      messages.value.push(localMessage);
+      // Don't add to local messages - it will be received via the message handler
+      // This prevents message duplication
       
     } catch (error) {
       console.error('Failed to send message:', error);
@@ -280,6 +380,14 @@ export default function useTeacherPage() {
     toggleCursorStream,
     handleMouseMove,
     handleMouseLeave,
-    teacherWhiteboard
+    teacherWhiteboard,
+    // Private chat functionality
+    isInPrivateChat,
+    privateChatStudent,
+    privateMessages,
+    newPrivateMessage,
+    startPrivateChat,
+    sendPrivateMessage,
+    endPrivateChat
   };
 }

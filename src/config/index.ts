@@ -11,7 +11,8 @@ export const config = {
     endpoints: {
       chat: '/class/chat',
       studentJoin: '/class/join',
-      studentLeave: '/class/leave'
+      studentLeave: '/class/leave',
+      privateChat: '/class/private-chat'
     },
     
     // WebSocket configuration
