@@ -40,10 +40,13 @@ export class ClassService {
   private cursorToggleHandlers: ((data: any) => void)[] = [];
   private privateChatHandlers: ((data: any) => void)[] = [];
   private ablyChannel: Ably.RealtimeChannel | null = null;
-  private privateChannel: Ably.RealtimeChannel | null = null;
+  private _privateChannel: Ably.RealtimeChannel | null = null;
   private userDisplayNames: Map<string, string> = new Map(); // Track user ID to display name mapping
+  private processedJoinMessages: Set<string> = new Set(); // Track processed join/leave messages to prevent duplicates
   private isInPrivateChat: boolean = false;
   private currentPrivateChannelId: string | null = null;
+  private beforeUnloadHandler: ((event: BeforeUnloadEvent) => void) | null = null;
+  private privateChatStartTime: number | null = null; // Track when private chat started to rewind only from that point
   // Note: WebSocket properties removed to save quotas - will be added back when needed
 
   /**
@@ -71,15 +74,23 @@ export class ClassService {
       // If student, also auto-subscribe to their private channel for potential teacher messages
       if (user.role === 'student') {
         const privateChannelId = `${user.id}`;
-        this.privateChannel = await apiService.subscribeToPrivateChannel(privateChannelId, (data: any) => {
+        this._privateChannel = await apiService.subscribeToPrivateChannel(privateChannelId, (data: any) => {
           this.handlePrivateMessage(data);
         });
+        
+        // Set up beforeunload handler to notify server when student leaves due to refresh/close
+        this.setupBeforeUnloadHandler();
       }
       
-      // Notify the server that this student has joined the class
-      await apiService.notifyStudentJoin(classId, user.id, user.name);
+      // Notify the server that this user has joined the class
+      if (user.role === 'student') {
+        await apiService.notifyStudentJoin(classId, user.id, user.name);
+      } else if (user.role === 'teacher') {
+        // For teachers, we could add a similar notifyTeacherJoin method if needed
+        // For now, using the student join method but this could be separated
+        await apiService.notifyStudentJoin(classId, user.id, user.name);
+      }
       
-      console.log(`User ${user.name} joined class ${classId} with Ably subscription and auto-rewind`);
     } catch (error) {
       console.error('Failed to subscribe to Ably channel:', error);
       throw error;
@@ -108,14 +119,64 @@ export class ClassService {
       }
     }
     
+    // Remove beforeunload handler
+    this.cleanupBeforeUnloadHandler();
+    
     this.currentClassId = null;
     this.currentUser = null;
     this.ablyChannel = null;
-    this.privateChannel = null;
+    this._privateChannel = null;
     this.currentPrivateChannelId = null;
     this.isInPrivateChat = false;
+    this.privateChatStartTime = null; // Reset private chat start time
     this.userDisplayNames.clear(); // Clear stored display names when leaving class
-    console.log('Left the classroom');
+    this.processedJoinMessages.clear(); // Clear processed message tracking when leaving class
+  }
+
+  /**
+   * Set up beforeunload handler to notify server when student leaves due to page refresh/close
+   */
+  private setupBeforeUnloadHandler(): void {
+    // Remove any existing handler first
+    this.cleanupBeforeUnloadHandler();
+    
+    this.beforeUnloadHandler = (_event: BeforeUnloadEvent) => {
+      // Use sendBeacon for reliable delivery even during page unload
+      if (this.currentClassId && this.currentUser) {
+        // Create a synchronous request using sendBeacon (more reliable during page unload)
+        const data = JSON.stringify({
+          classId: this.currentClassId,
+          studentId: this.currentUser.id,
+          studentName: this.currentUser.name
+        });
+        
+        // Use navigator.sendBeacon for reliable delivery during page unload
+        if (navigator.sendBeacon) {
+          // Try to get the API base URL from the current environment
+          const baseUrl = window.location.origin; // Fallback to current origin
+          navigator.sendBeacon(`${baseUrl}/api/classes/leave`, data);
+        } else {
+          // Fallback for browsers that don't support sendBeacon
+          try {
+            apiService.notifyStudentLeave(this.currentClassId, this.currentUser.id, this.currentUser.name);
+          } catch (error) {
+            console.error('Failed to notify server of student leave during unload:', error);
+          }
+        }
+      }
+    };
+    
+    window.addEventListener('beforeunload', this.beforeUnloadHandler);
+  }
+
+  /**
+   * Clean up beforeunload handler
+   */
+  private cleanupBeforeUnloadHandler(): void {
+    if (this.beforeUnloadHandler) {
+      window.removeEventListener('beforeunload', this.beforeUnloadHandler);
+      this.beforeUnloadHandler = null;
+    }
   }
 
   /**
@@ -162,48 +223,126 @@ export class ClassService {
         return;
       }
 
-      // Handle student join/leave notifications
+      // Handle student join/leave notifications (visible to all users)
       if (data.type === 'student-join' && data.content && this.currentClassId && this.currentUser) {
         const joinData = data.content;
         
-        // Skip invalid content (like {ValueKind: 1})
-        if (joinData.ValueKind !== undefined) {
-          console.log('Skipping student-join message with invalid content:', joinData);
+        // Determine if this is actually a teacher or student based on the ID
+        const userId = joinData.studentId || data.from;
+        
+        // If the userId comes from data.from (not joinData.studentId), and it's a teacher ID,
+        // this might be a teacher join message sent through the student-join channel
+        const isTeacher = userId && userId.startsWith('teacher-');
+        const isStudent = userId && userId.startsWith('student-');
+        
+        // If this is actually a teacher joining but sent as student-join, skip it
+        // Teachers should use teacher-join message type, not student-join
+        if (isTeacher && !joinData.studentId) {
           return;
         }
         
-        // Try to extract student info from the original message if content parsing fails
-        let studentId = joinData.studentId || data.from;
-        let studentName = joinData.studentName;
+        // Create a unique deduplication key (only for valid student joins)
+        const dedupeKey = `join-${userId}`;
         
-        // If we can't get the name from content, try to extract from the ID
-        if (!studentName && studentId) {
-          // Extract name from ID format: student-name-randomstring
-          if (studentId.startsWith('student-')) {
-            const parts = studentId.split('-');
+        // Check if we've already processed a join message for this user recently
+        if (this.processedJoinMessages.has(dedupeKey)) {
+          return;
+        }
+        
+        // Mark this join as processed (clear after 5 seconds to allow for legitimate rejoin)
+        this.processedJoinMessages.add(dedupeKey);
+        setTimeout(() => {
+          this.processedJoinMessages.delete(dedupeKey);
+        }, 5000);
+        
+        // Skip invalid content (like {ValueKind: 1}) but extract info from the main data object
+        if (joinData.ValueKind !== undefined) {
+          // Try to extract user info from the main data object instead
+          let displayName = '';
+          
+          if (isTeacher) {
+            displayName = 'Teacher';
+          } else if (isStudent) {
+            // Extract name from ID format: student-name-randomstring
+            const parts = userId.split('-');
             if (parts.length >= 2) {
               // Take everything between 'student-' and the last random part
               const nameParts = parts.slice(1, -1);
-              studentName = nameParts.join(' ');
+              displayName = nameParts.join(' ');
               // Capitalize first letter of each word
-              studentName = studentName.split(' ').map((word: string) => 
+              displayName = displayName.split(' ').map((word: string) => 
                 word.charAt(0).toUpperCase() + word.slice(1)
               ).join(' ');
             }
+          } else {
+            // If it's neither teacher- nor student- prefix, treat as student by default
+            // This handles cases where the user ID doesn't follow the expected format
+            displayName = userId; // Use the actual user ID as the display name
+          }
+          
+          if (!displayName) {
+            displayName = isTeacher ? 'Teacher' : 'Student'; // Fallback name
+          }
+          
+          // Store the user's display name
+          this.userDisplayNames.set(userId, displayName);
+          
+          // Create appropriate join message - default to student if not clearly a teacher
+          const joinMessage: ChatMessageReceived = {
+            id: `join-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            classId: this.currentClassId,
+            from: userId,
+            fromName: displayName,
+            to: 'all',
+            message: `${displayName} joined the class`,
+            timestamp: Date.now(),
+            type: 'system'
+          };
+          
+          this.emitMessage(joinMessage);
+          return;
+        }
+        
+        // Try to extract user info from the original message if content parsing fails
+        let displayName = joinData.studentName;
+        
+        // If we can't get the name from content, try to extract from the ID
+        if (!displayName && userId) {
+          if (isTeacher) {
+            displayName = 'Teacher';
+          } else if (isStudent) {
+            // Extract name from ID format: student-name-randomstring
+            const parts = userId.split('-');
+            if (parts.length >= 2) {
+              // Take everything between 'student-' and the last random part
+              const nameParts = parts.slice(1, -1);
+              displayName = nameParts.join(' ');
+              // Capitalize first letter of each word
+              displayName = displayName.split(' ').map((word: string) => 
+                word.charAt(0).toUpperCase() + word.slice(1)
+              ).join(' ');
+            }
+          } else {
+            // If it's neither teacher- nor student- prefix, use the provided name or user ID
+            displayName = joinData.studentName || userId;
           }
         }
         
-        // Store the new student's display name
-        this.userDisplayNames.set(studentId, studentName);
+        if (!displayName) {
+          displayName = isTeacher ? 'Teacher' : (joinData.studentName || 'Student'); // Use provided name if available
+        }
         
-        // Emit a special join message for UI updates
+        // Store the user's display name
+        this.userDisplayNames.set(userId, displayName);
+        
+        // Create appropriate join message - default to student if not clearly a teacher
         const joinMessage: ChatMessageReceived = {
           id: `join-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
           classId: this.currentClassId,
-          from: studentId,
-          fromName: studentName,
+          from: userId,
+          fromName: displayName,
           to: 'all',
-          message: `${studentName} joined the class`,
+          message: `${displayName} joined the class`,
           timestamp: joinData.timestamp || Date.now(),
           type: 'system'
         };
@@ -216,20 +355,88 @@ export class ClassService {
       if (data.type === 'student-leave' && data.content && this.currentClassId && this.currentUser) {
         const leaveData = data.content;
         
-        // Skip invalid content (like {ValueKind: 1})
+        // Determine if this is actually a teacher or student based on the ID
+        const userId = leaveData.studentId || data.from;
+        const isTeacher = userId && userId.startsWith('teacher-');
+        const isStudent = userId && userId.startsWith('student-');
+        
+        // Skip invalid content (like {ValueKind: 1}) but extract info from the main data object
         if (leaveData.ValueKind !== undefined) {
-          console.log('Skipping student-leave message with invalid content:', leaveData);
+          // Try to extract user info from the main data object instead
+          let displayName = '';
+          
+          if (isTeacher) {
+            displayName = 'Teacher';
+          } else if (isStudent) {
+            // Extract name from ID format: student-name-randomstring
+            const parts = userId.split('-');
+            if (parts.length >= 2) {
+              // Take everything between 'student-' and the last random part
+              const nameParts = parts.slice(1, -1);
+              displayName = nameParts.join(' ');
+              // Capitalize first letter of each word
+              displayName = displayName.split(' ').map((word: string) => 
+                word.charAt(0).toUpperCase() + word.slice(1)
+              ).join(' ');
+            }
+          }
+          
+          if (!displayName) {
+            displayName = isTeacher ? 'Teacher' : 'Student'; // Fallback name
+          }
+          
+          // Create appropriate leave message
+          const leaveMessage: ChatMessageReceived = {
+            id: `leave-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            classId: this.currentClassId,
+            from: userId,
+            fromName: displayName,
+            to: 'all',
+            message: `${displayName} left the class`,
+            timestamp: Date.now(),
+            type: 'system'
+          };
+          
+          this.emitMessage(leaveMessage);
+          
+          // Remove the user's display name from mapping
+          this.userDisplayNames.delete(userId);
           return;
         }
         
-        // Emit a special leave message for UI updates
+        // Extract user info from the original message
+        let displayName = leaveData.studentName;
+        
+        if (!displayName) {
+          if (isTeacher) {
+            displayName = 'Teacher';
+          } else if (isStudent) {
+            // Extract name from ID format: student-name-randomstring
+            const parts = userId.split('-');
+            if (parts.length >= 2) {
+              // Take everything between 'student-' and the last random part
+              const nameParts = parts.slice(1, -1);
+              displayName = nameParts.join(' ');
+              // Capitalize first letter of each word
+              displayName = displayName.split(' ').map((word: string) => 
+                word.charAt(0).toUpperCase() + word.slice(1)
+              ).join(' ');
+            }
+          }
+        }
+        
+        if (!displayName) {
+          displayName = isTeacher ? 'Teacher' : 'Student'; // Fallback name
+        }
+        
+        // Create appropriate leave message
         const leaveMessage: ChatMessageReceived = {
           id: `leave-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
           classId: this.currentClassId,
-          from: leaveData.studentId,
-          fromName: leaveData.studentName,
+          from: userId,
+          fromName: displayName,
           to: 'all',
-          message: `${leaveData.studentName} left the class`,
+          message: `${displayName} left the class`,
           timestamp: leaveData.timestamp || Date.now(),
           type: 'system'
         };
@@ -237,13 +444,67 @@ export class ClassService {
         // Emit the leave message - duplicate handling is done in the components
         this.emitMessage(leaveMessage);
         
-        // Remove the student's display name from mapping
-        this.userDisplayNames.delete(leaveData.studentId);
+        // Remove the user's display name from mapping
+        this.userDisplayNames.delete(userId);
+        return;
+      }
+
+      // Handle teacher join/leave notifications (visible to all users)
+      if (data.type === 'teacher-join' && data.content && this.currentClassId && this.currentUser) {
+        const joinData = data.content;
+        
+        // Extract teacher info
+        let teacherId = joinData.teacherId || data.from;
+        let teacherName = joinData.teacherName || 'Teacher';
+        
+        // Store the teacher's display name
+        this.userDisplayNames.set(teacherId, teacherName);
+        
+        // Emit a special join message for UI updates
+        const joinMessage: ChatMessageReceived = {
+          id: `teacher-join-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          classId: this.currentClassId,
+          from: teacherId,
+          fromName: teacherName,
+          to: 'all',
+          message: `${teacherName} joined the class`,
+          timestamp: joinData.timestamp || Date.now(),
+          type: 'system'
+        };
+        
+        this.emitMessage(joinMessage);
+        return;
+      }
+
+      if (data.type === 'teacher-leave' && data.content && this.currentClassId && this.currentUser) {
+        const leaveData = data.content;
+        
+        // Extract teacher info
+        let teacherId = leaveData.teacherId || data.from;
+        let teacherName = leaveData.teacherName || 'Teacher';
+        
+        // Emit a special leave message for UI updates
+        const leaveMessage: ChatMessageReceived = {
+          id: `teacher-leave-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          classId: this.currentClassId,
+          from: teacherId,
+          fromName: teacherName,
+          to: 'all',
+          message: `${teacherName} left the class`,
+          timestamp: leaveData.timestamp || Date.now(),
+          type: 'system'
+        };
+        
+        this.emitMessage(leaveMessage);
+        
+        // Remove the teacher's display name from mapping
+        this.userDisplayNames.delete(teacherId);
         return;
       }
 
       // Handle regular chat messages
       if (data.type === 'chat' && data.content && this.currentClassId && this.currentUser) {
+        
         // Get display name from stored mapping, fallback to extracting from ID
         let displayName = this.userDisplayNames.get(data.from);
         if (!displayName) {
@@ -266,6 +527,12 @@ export class ClassService {
           if (displayName) {
             this.userDisplayNames.set(data.from, displayName);
           }
+        }
+
+        // Special handling: if this is our own message, ensure correct display name
+        if (this.currentUser && data.from === this.currentUser.id) {
+          displayName = this.currentUser.name; // Use the actual user's name (whether teacher or student)
+          this.userDisplayNames.set(data.from, displayName); // Update the mapping
         }
 
         // Use backend timestamp if available, fallback to current time
@@ -345,7 +612,6 @@ export class ClassService {
     _onError?: (error: Event) => void,
     _onDisconnect?: (event: CloseEvent) => void
   ): void {
-    console.log('Cursor streaming disabled to save quotas');
     // Implementation will be added later when needed
     return;
   }
@@ -355,7 +621,6 @@ export class ClassService {
    * Currently disabled to save quotas - will be implemented later
    */
   sendCursorPosition(_x: number, _y: number, _additionalData?: Record<string, any>): void {
-    console.log('Cursor position tracking disabled to save quotas');
     // Implementation will be added later when needed
     return;
   }
@@ -598,6 +863,9 @@ export class ClassService {
     }
 
     try {
+      // Record the time when private chat starts for precise rewind later
+      this.privateChatStartTime = Date.now();
+      
       // Leave main channel
       if (this.ablyChannel) {
         await apiService.unsubscribeFromClassChannel(this.currentClassId);
@@ -608,7 +876,7 @@ export class ClassService {
       const privateChannelId = `${this.currentUser.id}_${studentId}`;
       
       // Join private channel
-      this.privateChannel = await apiService.subscribeToPrivateChannel(privateChannelId, (data: any) => {
+      this._privateChannel = await apiService.subscribeToPrivateChannel(privateChannelId, (data: any) => {
         this.handlePrivateMessage(data);
       });
       
@@ -646,6 +914,9 @@ export class ClassService {
     }
 
     try {
+      // Record the time when private chat starts for precise rewind later
+      this.privateChatStartTime = Date.now();
+      
       // Leave main channel
       if (this.ablyChannel) {
         await apiService.unsubscribeFromClassChannel(this.currentClassId);
@@ -656,7 +927,7 @@ export class ClassService {
       const privateChannelId = `${teacherId}_${this.currentUser.id}`;
       
       // Subscribe to private channel
-      this.privateChannel = await apiService.subscribeToPrivateChannel(privateChannelId, (data: any) => {
+      this._privateChannel = await apiService.subscribeToPrivateChannel(privateChannelId, (data: any) => {
         this.handlePrivateMessage(data);
       });
       
@@ -714,19 +985,26 @@ export class ClassService {
     }
 
     try {
+
       // Leave private channel if connected
       if (this.currentPrivateChannelId) {
         await apiService.unsubscribeFromPrivateChannel(this.currentPrivateChannelId);
-        this.privateChannel = null;
+        this._privateChannel = null;
         this.currentPrivateChannelId = null;
       }
 
-      // Rejoin main channel
+      // Rejoin main channel with message history to catch up on messages missed during private chat
+      // Use the exact time when private chat started for precise rewind
+      const rewindFromTime = this.privateChatStartTime || (Date.now() - (2 * 60 * 1000)); // Fallback to 2 minutes if no start time
+      
       this.ablyChannel = await apiService.subscribeToClassChannel(this.currentClassId, (data: any) => {
         this.handleAblyMessage(data);
-      });
-
+      }, rewindFromTime);
+      
       this.isInPrivateChat = false;
+      // Reset the private chat start time
+      this.privateChatStartTime = null;
+      
     } catch (error) {
       console.error('Failed to end private chat:', error);
       throw error;

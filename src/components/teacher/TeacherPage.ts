@@ -47,6 +47,7 @@ export default function useTeacherPage() {
 
   // Handle incoming chat messages
   const handleChatMessage = (message: ChatMessageReceived) => {
+    
     // Check if we already have this message (prevent duplicates)
     const messageExists = messages.value.some(m => m.id === message.id);
     if (messageExists) {
@@ -59,17 +60,27 @@ export default function useTeacherPage() {
     // Handle system messages for student join/leave (but not for our own messages)
     if (message.type === 'system' && message.from !== teacher.id) {
       if (message.message && message.message.includes('joined the class')) {
-        // Add student to connected list when they join
-        const studentName = message.fromName || 'Unknown Student';
-        const studentId = message.from; // This is the actual student ID
-        connectedStudents.value.set(studentId, studentName);
-        showNotification(`🎉 ${studentName} joined the class`);
+        // Only add to connected list if it's actually a student (not a teacher)
+        const userId = message.from;
+        const isStudent = userId && userId.startsWith('student-');
+        
+        if (isStudent) {
+          const studentName = message.fromName || 'Unknown Student';
+          const studentId = message.from; // This is the actual student ID
+          connectedStudents.value.set(studentId, studentName);
+          showNotification(`🎉 ${studentName} joined the class`);
+        }
       } else if (message.message && message.message.includes('left the class')) {
-        // Remove student from connected list when they leave
-        const studentId = message.from;
-        const studentName = message.fromName || 'Unknown Student';
-        connectedStudents.value.delete(studentId);
-        showNotification(`👋 ${studentName} left the class`);
+        // Only remove from connected list if it's actually a student
+        const userId = message.from;
+        const isStudent = userId && userId.startsWith('student-');
+        
+        if (isStudent) {
+          const studentId = message.from;
+          const studentName = message.fromName || 'Unknown Student';
+          connectedStudents.value.delete(studentId);
+          showNotification(`👋 ${studentName} left the class`);
+        }
       }
     } else if (message.from !== teacher.id) {
       // Track connected students based on regular messages using their display names

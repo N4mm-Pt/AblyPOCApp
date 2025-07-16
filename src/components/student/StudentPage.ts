@@ -139,8 +139,6 @@ export default function useStudentPage() {
       // Test notification system
       showNotification(`✅ You joined the class as ${name.trim()}`);
       
-      console.log('Student joined class:', classId, 'as:', name);
-      
     } catch (error) {
       console.error('Failed to join class:', error);
       connectionError.value = 'Failed to join class';
@@ -178,18 +176,8 @@ export default function useStudentPage() {
     try {
       await classService.sendMessage('🖐️ Hand raised', 'all', 'hand-raise');
       
-      // Add to local messages
-      const localMessage: ChatMessageReceived = {
-        id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-        classId,
-        from: student.id,
-        fromName: student.name,
-        to: 'all',
-        message: '🖐️ Hand raised',
-        timestamp: Date.now(),
-        type: 'hand-raise'
-      };
-      messages.value.push(localMessage);
+      // Don't add locally - the message will be received via Ably subscription
+      // This prevents duplication
       
     } catch (error) {
       console.error('Failed to raise hand:', error);

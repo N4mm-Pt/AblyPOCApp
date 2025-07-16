@@ -69,11 +69,7 @@ export const validateConfig = (): { isValid: boolean; errors: string[] } => {
 // Log configuration status in development
 if (import.meta.env.DEV) {
   const validation = validateConfig();
-  if (validation.isValid) {
-    console.log('✅ Configuration loaded successfully');
-    console.log('🔑 Ably API Key:', config.ably.apiKey ? `${config.ably.apiKey.substring(0, 10)}...` : 'Not set');
-    console.log('🌐 API Base URL:', config.api.baseUrl);
-  } else {
+  if (!validation.isValid) {
     console.warn('⚠️ Configuration issues found:', validation.errors);
   }
 }

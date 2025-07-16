@@ -68,8 +68,6 @@ export class ApiService {
       console.warn('⚠️ Using placeholder Ably API key. Please update VITE_ABLY_API_KEY in your .env file.');
     }
 
-    console.log('🔑 Initializing Ably with API key:', config.ably.apiKey.substring(0, 10) + '...');
-
     this.ably = new Ably.Realtime({
       key: config.ably.apiKey,
       clientId: clientId,
@@ -78,7 +76,6 @@ export class ApiService {
 
     return new Promise((resolve, reject) => {
       this.ably!.connection.on('connected', () => {
-        console.log('Ably connected successfully');
         resolve(this.ably!);
       });
 
@@ -88,7 +85,6 @@ export class ApiService {
       });
 
       this.ably!.connection.on('disconnected', () => {
-        console.log('Ably disconnected');
       });
     });
   }
@@ -97,11 +93,13 @@ export class ApiService {
    * Subscribe to a class channel for real-time messages
    * @param classId The class ID
    * @param onMessage Callback for incoming messages
+   * @param rewindFromTime Optional timestamp to rewind from (default: 2 minutes ago)
    * @returns Promise<Ably.RealtimeChannel>
    */
   async subscribeToClassChannel(
     classId: string, 
-    onMessage: (message: any) => void
+    onMessage: (message: any) => void,
+    rewindFromTime?: number
   ): Promise<Ably.RealtimeChannel> {
     if (!this.ably) {
       throw new Error('Ably not initialized. Call initializeAbly() first.');
@@ -109,24 +107,37 @@ export class ApiService {
 
     const channelName = `${config.ably.channelPrefix}${classId}`;
     
-    // Get channel with rewind parameter to fetch recent messages on connect
-    const channel = this.ably.channels.get(channelName, {
-      params: {
-        rewind: '2m', // Fetch messages from the last 2 minutes on connect
+    // Calculate rewind time - use provided time or default to 2 minutes ago
+    const rewindTime = rewindFromTime || (Date.now() - (2 * 60 * 1000));
+    
+    // Get channel without rewind options to avoid reattach issues
+    // We'll rely on explicit history retrieval instead
+    const channel = this.ably.channels.get(channelName);
+
+    // Subscribe to all events on the channel to ensure we get all message types
+    // This is more robust than subscribing to individual event types
+    await channel.subscribe((message) => {
+      onMessage(message.data);
+    });
+
+    // Explicitly request recent history to get missed messages
+    try {
+      const historyResult = await channel.history({
+        limit: 50, // Get up to 50 recent messages
+        start: rewindTime, // From the specified rewind time
+        direction: 'forwards' // Get messages in chronological order
+      });
+      
+      if (historyResult.items && historyResult.items.length > 0) {
+        // Process historical messages in chronological order
+        historyResult.items.reverse().forEach((message) => {
+          onMessage(message.data);
+        });
       }
-    });
+    } catch (historyError) {
+      console.warn('Failed to retrieve channel history:', historyError);
+    }
 
-    await channel.subscribe('chat', (message) => {
-      console.log('Received chat message:', message.data);
-      onMessage(message.data);
-    });
-
-    // Also subscribe to cursor-stream events for real-time cursor tracking
-    await channel.subscribe('cursor-stream', (message) => {
-      onMessage(message.data);
-    });
-
-    console.log(`Subscribed to channel: ${channelName} with 2-minute rewind for chat and cursor events`);
     return channel;
   }
 
@@ -142,7 +153,6 @@ export class ApiService {
     const channelName = `${config.ably.channelPrefix}${classId}`;
     const channel = this.ably.channels.get(channelName);
     await channel.unsubscribe();
-    console.log(`Unsubscribed from channel: ${channelName}`);
   }
 
   /**
@@ -195,7 +205,6 @@ export class ApiService {
     if (this.ably) {
       this.ably.close();
       this.ably = null;
-      console.log('Ably connection closed');
     }
   }
 
@@ -203,11 +212,10 @@ export class ApiService {
    * Set the client ID for Ably connection
    * @param clientId The client ID to set
    */
-  setClientId(clientId: string): void {
+  setClientId(_clientId: string): void {
     if (this.ably) {
       // Note: clientId should be set during initialization
       // This is for future use if we need dynamic client IDs
-      console.log('Client ID set:', clientId);
     }
   }
 
@@ -419,12 +427,9 @@ export class ApiService {
     const maxAttempts = 5;
     const retryDelay = Math.min(1000 * Math.pow(2, attempt), 30000); // Exponential backoff
 
-    console.log(`Reconnecting to Ably in ${retryDelay / 1000} seconds... (Attempt ${attempt}/${maxAttempts})`);
-
     setTimeout(async () => {
       try {
         await this.initializeAbly(clientId);
-        console.log('Reconnected to Ably successfully');
       } catch (error) {
         console.error('Ably reconnection failed:', error);
 
