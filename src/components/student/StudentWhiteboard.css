@@ -97,6 +97,49 @@
   animation: bounce 2s infinite;
 }
 
+/* Teacher cursor pointer styles for Vue template */
+.teacher-cursor-pointer {
+  position: absolute;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  z-index: 10;
+}
+
+.cursor-dot {
+  width: 24px;
+  height: 24px;
+  background: radial-gradient(circle, #dc2626, #b91c1c);
+  border: 3px solid white;
+  border-radius: 50%;
+  box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4);
+  animation: cursorPulse 1.5s infinite;
+  position: relative;
+}
+
+.cursor-dot::after {
+  content: '👨‍🏫';
+  position: absolute;
+  top: -30px;
+  left: -8px;
+  font-size: 16px;
+  animation: bounce 2s infinite;
+}
+
+.cursor-label {
+  position: absolute;
+  top: -50px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(220, 38, 38, 0.9);
+  color: white;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
 @keyframes cursorPulse {
   0%, 100% {
     transform: translate(-50%, -50%) scale(1);

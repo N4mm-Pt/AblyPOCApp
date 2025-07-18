@@ -1,11 +1,19 @@
 /* Responsive design */
 @media (max-width: 768px) {
   .student-page {
-    padding: 12px;
+    padding: 4px; /* Minimal mobile padding for maximum space */
+    padding-top: 88px; /* Adjusted for mobile header height */
+  }
+  
+  .classroom-layout {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
   }
   
   .notification {
-    top: 60px; /* Adjust for mobile */
+    top: 96px; /* Adjusted for mobile */
     right: 12px;
     left: 12px; /* Make it full width on mobile */
     max-width: none;
@@ -23,8 +31,8 @@
   }
   
   .connection-status {
-    padding: 10px 12px;
-    margin-bottom: 12px;
+    padding: 3px 6px; /* Ultra-compact mobile padding for more chat space */
+    margin-bottom: 4px; /* Minimal mobile margin */
   }
   
   .status-row {
@@ -34,7 +42,8 @@
   }
   
   .chat-section {
-    padding: 12px;
+    padding: 4px; /* Ultra-minimal mobile chat padding for maximum space */
+    max-height: 88vh; /* Match desktop proportion for mobile */
   }
   
   .chat-input {
@@ -58,24 +67,25 @@
   }
   
   .messages {
-    max-height: calc(100vh - 300px);
-    min-height: 250px;
+    max-height: 70vh; /* Match desktop proportion for mobile */
+    min-height: 80px; /* Reduced minimum height on mobile */
   }
   
   .private-messages {
-    height: calc(100vh - 350px);
-    min-height: 250px;
-    max-height: 400px;
+    height: calc(100vh - 250px); /* Reduced for private chat space */
+    min-height: 180px; /* Reduced minimum height */
+    max-height: 350px; /* Reduced maximum height */
   }
 }
 
 @media (max-width: 480px) {
   .student-page {
-    padding: 8px;
+    padding: 3px; /* Ultra-minimized padding for extra small screens */
+    padding-top: 95px; /* Adjusted for smaller screens */
   }
   
   .notification {
-    top: 50px; /* Adjust for smaller screens */
+    top: 105px; /* Adjusted notification position */
     right: 8px;
     left: 8px;
     font-size: 12px;
@@ -102,6 +112,7 @@
   
   .chat-section {
     padding: 10px;
+    max-height: 95vh; /* Match desktop proportion for small screens */
   }
   
   .chat-input input {
@@ -129,5 +140,9 @@
   .close-whiteboard-btn {
     padding: 6px 12px;
     font-size: 13px;
+  }
+  .messages {
+    max-height: 80vh; /* Match desktop proportion for small screens */
+    min-height: 60px;
   }
 }

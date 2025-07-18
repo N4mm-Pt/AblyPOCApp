@@ -42,7 +42,7 @@
 
     <div class="chat-section">
       <!-- Main Chat View -->
-      <div v-if="!isInPrivateChat">
+      <div v-if="!isInPrivateChat" class="main-chat-interface">
         <h2>Main Chat</h2>
         <div class="messages">
           <div 
@@ -89,7 +89,7 @@
       </div>
 
       <!-- Private Chat View -->
-      <div v-else class="private-chat">
+      <div v-else class="private-chat-interface">
         <div class="private-chat-header">
           <h2>💬 Private Chat with {{ privateChatStudent?.name }}</h2>
           <button @click="endPrivateChat" class="end-chat-btn" title="End private chat">

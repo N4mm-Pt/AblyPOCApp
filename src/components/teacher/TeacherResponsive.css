@@ -4,10 +4,12 @@
     padding: 8px; /* Reduce padding to save space */
     max-width: 100vw;
     overflow-x: hidden;
+    top: 120px; /* Account for taller header on mobile */
+    height: calc(100vh - 120px); /* Adjust height for mobile header */
   }
   
   .notification {
-    top: 60px; /* Adjust for mobile */
+    top: 140px; /* Adjust for mobile header + spacing */
     right: 12px;
     left: 12px; /* Make it full width on mobile */
     max-width: none;
@@ -19,6 +21,23 @@
     padding: 8px 10px;
     margin-bottom: 8px;
     max-height: 130px; /* Adjust height for mobile balance */
+  }
+  
+  /* Ensure cursor button is always visible on mobile */
+  .status-row {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  
+  .cursor-control-compact {
+    min-width: 140px; /* Ensure button has enough space */
+    flex-shrink: 0;
+  }
+  
+  .cursor-btn-compact {
+    font-size: 0.75rem;
+    padding: 6px 12px;
+    white-space: nowrap;
   }
   
   .connection-status .student-list {

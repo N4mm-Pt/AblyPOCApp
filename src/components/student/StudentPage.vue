@@ -26,12 +26,13 @@
     </div>
 
     <!-- Main classroom interface - shown when joined -->
-    <div v-else class="classroom-interface">
+    <div v-else class="classroom-layout">
       <!-- Notification popup -->
       <div v-if="notification" class="notification">
         {{ notification }}
       </div>
       
+      <!-- Connection status moved to top level for better space utilization -->
       <div class="connection-status">
         <div class="status-row">
           <div class="status-info">
@@ -45,66 +46,68 @@
         </div>
       </div>
 
-      <div class="chat-section">
-        <!-- Private chat request notification -->
-        <div v-if="privateChatRequest" class="private-chat-request">
-          <div class="request-header">
-            <h3>Private Chat Request</h3>
-            <p><strong>{{ privateChatRequest.teacherName }}</strong> wants to start a private chat with you</p>
-          </div>
-          <div class="request-actions">
-            <button @click="acceptPrivateChat" class="accept-btn">Accept</button>
-            <button @click="declinePrivateChat" class="decline-btn">Decline</button>
-          </div>
-        </div>
-
-        <!-- Private Chat Interface -->
-        <div v-if="isInPrivateChat" class="private-chat-interface">
-          <div class="private-chat-header">
-            <h2>Private Chat with {{ privateChatPartnerName }}</h2>
-            <button @click="endPrivateChat" class="end-chat-btn">End Chat</button>
-          </div>
-          
-          <div class="private-messages">
-            <div 
-              v-for="message in privateMessages" 
-              :key="message.id" 
-              class="message"
-              :class="{
-                'message-teacher': message.from && message.from.startsWith('teacher-'),
-                'message-student': message.from && message.from.startsWith('student-')
-              }"
-            >
-              <div class="message-header">
-                <span class="message-from">{{ message.fromName }}</span>
-                <span class="message-time">{{ formatTime(message.timestamp) }}</span>
-              </div>
-              <div class="message-content">
-                {{ message.message }}
-              </div>
+      <!-- Classroom interface now focuses purely on chat -->
+      <div class="classroom-interface">
+        <div class="chat-section">
+          <!-- Private chat request notification -->
+          <div v-if="privateChatRequest" class="private-chat-request">
+            <div class="request-header">
+              <h3>Private Chat Request</h3>
+              <p><strong>{{ privateChatRequest.teacherName }}</strong> wants to start a private chat with you</p>
             </div>
-            <div v-if="privateMessages.length === 0" class="no-messages">
-              Private chat started. Say hello!
+            <div class="request-actions">
+              <button @click="acceptPrivateChat" class="accept-btn">Accept</button>
+              <button @click="declinePrivateChat" class="decline-btn">Decline</button>
             </div>
           </div>
-          
-          <div class="chat-input">
-            <input 
-              v-model="newPrivateMessage" 
-              @keyup.enter="sendPrivateMessage"
-              placeholder="Type a private message..."
-              :disabled="!isConnected"
-            />
-            <button @click="sendPrivateMessage" :disabled="!isConnected || !newPrivateMessage.trim()" class="send-btn">
-              Send
-            </button>
-          </div>
-        </div>
 
-        <!-- Main Chat Interface (when not in private chat) -->
-        <div v-else class="main-chat-interface">
-          <h2>Class Chat</h2>
-          <div class="messages">
+          <!-- Private Chat Interface -->
+          <div v-if="isInPrivateChat" class="private-chat-interface">
+            <div class="private-chat-header">
+              <h2>Private Chat with {{ privateChatPartnerName }}</h2>
+              <button @click="endPrivateChat" class="end-chat-btn">End Chat</button>
+            </div>
+            
+            <div class="private-messages">
+              <div 
+                v-for="message in privateMessages" 
+                :key="message.id" 
+                class="message"
+                :class="{
+                  'message-teacher': message.from && message.from.startsWith('teacher-'),
+                  'message-student': message.from && message.from.startsWith('student-')
+                }"
+              >
+                <div class="message-header">
+                  <span class="message-from">{{ message.fromName }}</span>
+                  <span class="message-time">{{ formatTime(message.timestamp) }}</span>
+                </div>
+                <div class="message-content">
+                  {{ message.message }}
+                </div>
+              </div>
+              <div v-if="privateMessages.length === 0" class="no-messages">
+                Private chat started. Say hello!
+              </div>
+            </div>
+            
+            <div class="chat-input">
+              <input 
+                v-model="newPrivateMessage" 
+                @keyup.enter="sendPrivateMessage"
+                placeholder="Type a private message..."
+                :disabled="!isConnected"
+              />
+              <button @click="sendPrivateMessage" :disabled="!isConnected || !newPrivateMessage.trim()" class="send-btn">
+                Send
+              </button>
+            </div>
+          </div>
+
+          <!-- Main Chat Interface (when not in private chat) -->
+          <div v-else class="main-chat-interface">
+            <h2>Class Chat</h2>
+            <div class="messages">
             <div 
               v-for="message in messages" 
               :key="message.id" 
@@ -142,15 +145,16 @@
               Send
             </button>
           </div>
-        </div>
-      </div>
+          </div>
+        </div> <!-- chat-section -->
+      </div> <!-- classroom-interface -->
 
       <div class="teacher-cursor" style="display: none;">
         <!-- Teacher cursor display disabled to save quotas - will be implemented later -->
         <h2>Teacher Activity (Coming Soon)</h2>
         <p>Real-time teacher cursor tracking will be implemented when needed to save quotas.</p>
       </div>
-    </div> <!-- classroom-interface -->
+    </div> <!-- classroom-layout -->
 
     <!-- Student Whiteboard Overlay (when teacher is streaming) -->
     <div v-if="isTeacherCursorStreaming" class="student-whiteboard" ref="studentWhiteboard">
