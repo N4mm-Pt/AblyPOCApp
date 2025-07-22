@@ -40,6 +40,7 @@ export class ClassService {
   private cursorToggleHandlers: ((data: any) => void)[] = [];
   private privateChatHandlers: ((data: any) => void)[] = [];
   private ablyChannel: Ably.RealtimeChannel | null = null;
+  // @ts-ignore
   private _privateChannel: Ably.RealtimeChannel | null = null;
   private userDisplayNames: Map<string, string> = new Map(); // Track user ID to display name mapping
   private processedJoinMessages: Set<string> = new Set(); // Track processed join/leave messages to prevent duplicates
