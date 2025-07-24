@@ -39,6 +39,7 @@ export class ClassService {
   private cursorHandlers: ((data: any) => void)[] = [];
   private cursorToggleHandlers: ((data: any) => void)[] = [];
   private privateChatHandlers: ((data: any) => void)[] = [];
+  //@ts-ignore 
   private ablyChannel: Ably.RealtimeChannel | null = null;
   // @ts-ignore
   private _privateChannel: Ably.RealtimeChannel | null = null;
